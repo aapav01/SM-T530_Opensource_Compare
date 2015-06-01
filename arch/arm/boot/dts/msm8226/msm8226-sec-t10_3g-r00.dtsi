@@ -10,8 +10,8 @@
  * GNU General Public License for more details.
  */
 
-/include/ "msm8226-camera-sensor-mtp-matisse_eur-r02.dtsi"
-/include/ "dsi_panel_sdc_wxga_video.dtsi"
+/include/ "msm8226-camera-sensor-mtp-t10-eur-r00.dtsi"
+/include/ "dsi_panel_sdc_wxga_video_tn10.dtsi"
 
 &soc {
 	serial@f991f000 {
@@ -160,12 +160,12 @@
 			stm,irq_gpio = <&msmgpio 54 0x00>;
 			stm,reg_vdd = "8226_l19";
 			stm,reg_vio = "8226_lvs1";
-			stm,axis_map_x = <1>;
-			stm,axis_map_y = <0>;
+			stm,axis_map_x = <0>;
+			stm,axis_map_y = <1>;
 			stm,axis_map_z = <2>;
-			stm,negate_x = <0>;
+			stm,negate_x = <1>;
 			stm,negate_y = <1>;
-			stm,negate_z = <0>;
+			stm,negate_z = <1>;
 			stm,poll_interval = <100>;
 			stm,min_interval = <2>;
 		};
@@ -174,10 +174,13 @@
 		status="disabled";
 	};
 
-	i2c@f9927000{ /* BLSP1 QUP5 Hardware ID BLSP5 */
-		compatible = "qcom,i2c-qup";
-		qcom,scl-gpio = <&msmgpio 19 0>;
-		qcom,sda-gpio = <&msmgpio 18 0>;
+	i2c@35{
+		cell-index = <35>;
+		compatible = "i2c-gpio";
+		gpios = <&msmgpio 18 0 /* sda */
+				 &msmgpio 19 0 /* scl */
+				>;
+		i2c-gpio,delay-us = <2>;
 		fts_touch@49 {
 				compatible = "stm,fts_touch";
 				reg = <0x49>;
@@ -193,6 +196,9 @@
 	gpio_keys {
 		compatible = "gpio-keys";
 		input-name = "gpio-keys";
+
+		vddo-supply = <&pm8226_l6>;
+		vddo-voltage = <1800>;
 
 		home_key {
 			label = "home_key";
@@ -703,10 +709,19 @@
 };
 
 &mdss_dsi0 {
-	qcom,dsi-pref-prim-pan = <&dsi_sdc_wxga_vid>;
+	qcom,dsi-pref-prim-pan = <&dsi_sdc_wxga_vid_tn10>;
 };
 
-&dsi_sdc_wxga_vid {
-	qcom,cont-splash-enabled;
-	qcom,mdss-dsi-h-back-porch = <200>;
+/* RPM controlled regulators: */
+&rpm_bus {
+	rpm-regulator-ldoa23 {
+		status = "okay";
+		pm8226_l23: regulator-l23 {
+			regulator-name = "8226_l23";
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <3300000>;
+			qcom,init-voltage = <1800000>;
+			status = "okay";
+		};
+	};
 };

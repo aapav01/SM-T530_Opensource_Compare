@@ -5,7 +5,7 @@ BUILD_TOP_DIR=..
 BUILD_KERNEL_DIR=$(pwd)
 
 SECURE_SCRIPT=$BUILD_TOP_DIR/../buildscript/tools/signclient.jar
-BUILD_CROSS_COMPILE=../prebuilts/gcc/linux-x86/arm/arm-eabi-4.7/bin/arm-eabi-
+BUILD_CROSS_COMPILE=../../prebuilts/gcc/linux-x86/arm/arm-eabi-4.8/bin/arm-eabi-
 BUILD_JOB_NUMBER=`grep processor /proc/cpuinfo|wc -l`
 
 # Default Python version is 2.7
@@ -71,6 +71,10 @@ elif [ "$BUILD_COMMAND" == "klte_spr" ]; then
 	SIGN_MODEL=SM-G900P_NA_SPR_ROOT0
 elif [ "$BUILD_COMMAND" == "klte_usc" ]; then
 	SIGN_MODEL=SM-G900R4_NA_USC_ROOT0
+elif [ "$BUILD_COMMAND" == "kactivelte_att" ]; then
+	SIGN_MODEL=SM-G870A_NA_ATT_ROOT0
+elif [ "$BUILD_COMMAND" == "ksportslte_spr" ]; then
+	SIGN_MODEL=SM-G860P_NA_SPR_ROOT0
 else
 	SIGN_MODEL=
 fi
@@ -80,9 +84,25 @@ TEMP=${BUILD_COMMAND#*_}
 REGION=${TEMP%%_*}
 CARRIER=${TEMP##*_}
 
-VARIANT=k${CARRIER}
-DTS_NAMES=msm8974pro-ac-sec-k-
-#DTS_NAMES=msm8974pro-ac-sec
+if [[ "$BUILD_COMMAND" == "klte"* ]]; then		# KLTE
+	VARIANT=k${CARRIER}
+	DTS_NAMES=msm8974pro-ac-sec-k-
+elif [[ "$BUILD_COMMAND" == "kactivelte"* ]]; then	# KACTIVE
+	VARIANT=kactive${CARRIER}
+	DTS_NAMES=msm8974pro-ac-sec-kactivelte-
+elif [[ "$BUILD_COMMAND" == "ksportslte"* ]]; then	# KSPORTS
+	VARIANT=ksports${CARRIER}
+	DTS_NAMES=msm8974pro-ac-sec-ksports-
+elif [[ "$BUILD_COMMAND" == "slte"* ]]; then		# SLTE
+	VARIANT=s${CARRIER}
+	DTS_NAMES=msm8974pro-ac-sec-s-
+elif [[ "$BUILD_COMMAND" == "pateklte"* ]]; then	# PATEKLTE
+	VARIANT=patek${CARRIER}
+	DTS_NAMES=msm8974pro-ac-sec-patek-
+else
+	DTS_NAMES=
+fi
+
 PROJECT_NAME=${VARIANT}
 VARIANT_DEFCONFIG=msm8974pro_sec_${MODEL}_${CARRIER}_defconfig
 
@@ -97,11 +117,11 @@ case $1 in
 		#rm $BUILD_KERNEL_OUT_DIR -rf
 		exit 1
 		;;
-		
+
 		*)
-		BUILD_KERNEL_OUT_DIR=$BUILD_TOP_DIR/okernel
-		PRODUCT_OUT=$BUILD_TOP_DIR/okernel
-		
+		BUILD_KERNEL_OUT_DIR=$BUILD_TOP_DIR/okernel/$BUILD_COMMAND
+		PRODUCT_OUT=$BUILD_TOP_DIR/okernel/$BUILD_COMMAND
+
 		BOARD_KERNEL_BASE=0x00000000
 		BOARD_KERNEL_PAGESIZE=2048
 		BOARD_KERNEL_TAGS_OFFSET=0x01E00000
@@ -191,14 +211,14 @@ FUNC_BUILD_KERNEL()
 	echo "build secure option="$SECURE_OPTION ""
 	echo "build SEANDROID option="$SEANDROID_OPTION ""
 
-	if ! [ -e $PRODUCT_OUT/ramdisk.img ] ; then
-		echo "error no ramdisk : "$PRODUCT_OUT/ramdisk.img ""
-		exit -1
-	fi
-
 	if [ "$BUILD_COMMAND" == "" ]; then
 		SECFUNC_PRINT_HELP;
 		exit -1;
+	fi
+
+	if ! [ -e $PRODUCT_OUT/ramdisk.img ] ; then
+		echo "error no ramdisk : "$PRODUCT_OUT/ramdisk.img ""
+		exit -1
 	fi
 
 	make -C $BUILD_KERNEL_DIR O=$BUILD_KERNEL_OUT_DIR -j$BUILD_JOB_NUMBER ARCH=arm \
@@ -268,17 +288,17 @@ FUNC_MKBOOTIMG()
 	cd $PRODUCT_OUT
 	tar cvf boot_${MODEL}_${CARRIER}_${CERTIFICATION}.tar boot.img
 
-	if ! [ -d $BUILD_TOP_DIR/kernel/okernel ] ; then
-		mkdir -p $BUILD_TOP_DIR/kernel/okernel
+	if ! [ -d $BUILD_TOP_DIR/kernel/okernel/$BUILD_COMMAND ] ; then
+		mkdir -p $BUILD_TOP_DIR/kernel/okernel/$BUILD_COMMAND
 	else
-		rm $BUILD_TOP_DIR/kernel/okernel/boot_${MODEL}_${CARRIER}_${CERTIFICATION}.tar -f
+		rm $BUILD_TOP_DIR/kernel/okernel/$BUILD_COMMAND/boot_${MODEL}_${CARRIER}_${CERTIFICATION}.tar -f
 	fi
 
         echo ""
 	echo "================================================="
         echo "-->Note, copy to $BUILD_TOP_DIR/../output/ directory"
 	echo "================================================="
-	cp $PRODUCT_OUT/boot_${MODEL}_${CARRIER}_${CERTIFICATION}.tar $BUILD_TOP_DIR/../output/boot_${MODEL}_${CARRIER}_${CERTIFICATION}.tar || exit -1
+	cp ../$PRODUCT_OUT/boot_${MODEL}_${CARRIER}_${CERTIFICATION}.tar $BUILD_TOP_DIR/../../output/boot_${MODEL}_${CARRIER}_${CERTIFICATION}.tar || exit -1
         cd ~
 
 	echo ""
@@ -318,6 +338,10 @@ SECFUNC_PRINT_HELP()
 	echo "      klte_tmo"
 	echo "      klte_vzw"
 	echo "      klte_usc"
+	echo "      kactivelte_att"
+	echo "      ksportslte_spr"
+	echo "      slte_att"
+	echo "      pateklte_ctc"
 	echo "  \$2 : "
 	echo "      -B or Nothing  (-B : Secure Binary)"
 	echo "  \$3 : "

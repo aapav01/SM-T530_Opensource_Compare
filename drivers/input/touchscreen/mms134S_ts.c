@@ -1079,14 +1079,16 @@ static void melfas_ts_get_data(struct mms_ts_info *info)
 	int keyID = 0, touchType = 0, touchState = 0;
 	u8 setLowLevelData[2];
 
+	if (info == NULL) {
+		pr_err("%s : TS NULL\n", __func__);
+		return;
+	}
+
 	if (!info->tsp_enabled) {
 		dev_err(&info->client->dev, "[TSP ]%s. tsp_disabled.\n", __func__);
 		msleep(500);
 		return;
 	}
-
-	if (info == NULL)
-		dev_err(&info->client->dev, "%s : TS NULL\n", __func__);
 
 	for (j = 0; j < 3; j++) {
 		buf[0] = MMS_MIP_EVENT_PACKET_LENGTH;
@@ -1793,7 +1795,7 @@ static int get_raw_data_all(struct mms_ts_info *info, u8 cmd)
 	u8 sz = 0;
 	u8 buf[256] = {0, };
 	u8 reg[4] = { 0, };
-	s16 cmdata, max_value, min_value;
+	s16 cmdata, max_value = 0, min_value = 0;
 	char buff[TSP_CMD_STR_LEN] = {0};
 	s16 *raw_data;
 	struct i2c_msg msg[] = {
@@ -2491,7 +2493,7 @@ static int melfas_ts_probe(struct i2c_client *client, const struct i2c_device_id
 		}
 		ret = melfas_ts_parse_dt(&client->dev, dt_data);
 		if (ret < 0) {
-			kfree(dt_data);
+			devm_kfree(&client->dev, (void *)dt_data);
 			return ret;
 		}
 	} else	{
@@ -2672,7 +2674,7 @@ err_fw_update_failed:
 		melfas_ts_power_enable(0);
 	kfree(info);
 err_alloc_data_failed:
-	kfree(dt_data);
+	devm_kfree(&client->dev, (void *)dt_data);
 
 	return ret;
 }

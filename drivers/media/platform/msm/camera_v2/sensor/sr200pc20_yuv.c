@@ -12,19 +12,46 @@
  */
 
 #include "sr200pc20.h"
-#include "sr200pc20_yuv_t8.h"
 #include "msm_sd.h"
 #include "camera.h"
 #include "msm_cci.h"
 #include "msm_camera_dt_util.h"
 
+#if defined(CONFIG_SEC_T8_PROJECT)
+#include "sr200pc20_yuv_t8.h"
+#elif defined(CONFIG_SEC_T10_PROJECT)
+#include "sr200pc20_yuv_t10.h"
+#endif
+
+#if 0
+#define CONFIG_LOAD_FILE  // Enable it for Tuning Binary
+#endif
+
+#ifdef CONFIG_LOAD_FILE
+#define sr200pc20_WRT_LIST(s_ctrl,A)\
+    sr200_regs_from_sd_tuning(A,s_ctrl,#A);
+#else
 #define sr200pc20_WRT_LIST(s_ctrl,A)\
     s_ctrl->sensor_i2c_client->i2c_func_tbl->\
     i2c_write_conf_tbl(\
     s_ctrl->sensor_i2c_client, A,\
     ARRAY_SIZE(A),\
     MSM_CAMERA_I2C_BYTE_DATA);\
-	pr_err("sr200pc20_WRT_LIST - %s\n", #A);
+    pr_err("SR200pc20_WRT_LIST - %s\n", #A);
+#endif
+
+#ifdef CONFIG_LOAD_FILE
+#include <linux/vmalloc.h>
+#include <linux/fs.h>
+#include <linux/mm.h>
+#include <linux/slab.h>
+#include <linux/uaccess.h>
+static char *sr200_regs_table;
+static int sr200_regs_table_size;
+int sr200_regs_from_sd_tuning(struct msm_camera_i2c_reg_conf *settings, struct msm_sensor_ctrl_t *s_ctrl,char * name);
+void sr200_regs_table_init(char *filename);
+void sr200_regs_table_exit(void);
+#endif
 
 #define SR200PC20_VALUE_EXPOSURE 1
 #define SR200PC20_VALUE_WHITEBALANCE 2
@@ -35,10 +62,11 @@ static exif_data_t sr200pc20_exif;
 
 static int32_t streamon = 0;
 //static int32_t recording = 0;
-static int32_t resolution = MSM_SENSOR_RES_FULL;
 static unsigned int value_mark_ev = 0;
 static unsigned int value_mark_wb = 0;
 static unsigned int value_mark_effect = 0;
+
+static short scene_mode_chg = 0;
 
 int32_t sr200pc20_sensor_config(struct msm_sensor_ctrl_t *s_ctrl,
 	void __user *argp);
@@ -46,8 +74,10 @@ int32_t sr200pc20_sensor_native_control(struct msm_sensor_ctrl_t *s_ctrl,
 	void __user *argp);
 int sr200pc20_get_exif_data(struct msm_sensor_ctrl_t *s_ctrl, void __user *argp);
 void sr200pc20_get_exif(struct msm_sensor_ctrl_t *s_ctrl);
+int32_t sr200pc20_get_exif_info(struct ioctl_native_cmd * exif_info);
 static int sr200pc20_exif_shutter_speed(struct msm_sensor_ctrl_t *s_ctrl);
 static int sr200pc20_exif_iso(struct msm_sensor_ctrl_t *s_ctrl);
+static int32_t sr200pc20_set_metering(struct msm_sensor_ctrl_t *s_ctrl, int mode);
 
 int32_t sr200pc20_sensor_match_id(struct msm_camera_i2c_client *sensor_i2c_client,
     struct msm_camera_slave_info *slave_info, const char *sensor_name)
@@ -68,6 +98,113 @@ int32_t sr200pc20_sensor_match_id(struct msm_camera_i2c_client *sensor_i2c_clien
         pr_err("%s: chip id %x does not match read id: %x\n",
             __func__, chipid, slave_info->sensor_id);
     }
+    return rc;
+}
+
+int32_t sr200pc20_set_scene_mode(struct msm_sensor_ctrl_t *s_ctrl, int mode)
+{
+    int32_t rc = 0;
+    uint32_t exptime = 0;
+    uint32_t expmax = 0;
+    uint16_t value = 0;
+
+    CDBG("Scene mode E = %d", mode);
+    if (scene_mode_chg == 0) {
+        CDBG("scene mode has not changed from %d mode", mode);
+        return rc;
+    }
+
+    switch (mode) {
+    case CAMERA_SCENE_AUTO:
+            rc = sr200pc20_WRT_LIST(s_ctrl,sr200pc20m_scene_off);
+            break;
+    case CAMERA_SCENE_LANDSCAPE:
+            rc = sr200pc20_WRT_LIST(s_ctrl,sr200pc20m_scene_landscape);
+            break;
+    case CAMERA_SCENE_SPORT:
+            pr_err("%s: SPORT mode not supported\n", __func__);
+            break;
+    case CAMERA_SCENE_PARTY:
+            rc = sr200pc20_WRT_LIST(s_ctrl,sr200pc20m_scene_party);
+            break;
+    case CAMERA_SCENE_BEACH:
+            pr_err("%s: BEACH mode not supported\n", __func__);
+            break;
+    case CAMERA_SCENE_SUNSET:
+            rc = sr200pc20_WRT_LIST(s_ctrl,sr200pc20m_scene_sunset);
+            break;
+    case CAMERA_SCENE_DAWN:
+            rc = sr200pc20_WRT_LIST(s_ctrl,sr200pc20m_scene_dawn);
+            break;
+    case CAMERA_SCENE_FALL:
+            rc = sr200pc20_WRT_LIST(s_ctrl,sr200pc20m_scene_fall);
+            break;
+    case CAMERA_SCENE_CANDLE:
+            rc = sr200pc20_WRT_LIST(s_ctrl,sr200pc20m_scene_candle);
+            break;
+    case CAMERA_SCENE_FIRE:
+            pr_err("%s: FIRE mode not supported\n", __func__);
+            break;
+    case CAMERA_SCENE_AGAINST_LIGHT:
+            rc = sr200pc20_WRT_LIST(s_ctrl,sr200pc20m_scene_backlight);
+            break;
+    case CAMERA_SCENE_NIGHT:
+            s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client,
+                                                               0x03, 0x20,
+                                                               MSM_CAMERA_I2C_BYTE_DATA);
+            s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_read(s_ctrl->sensor_i2c_client,
+                                                               0x80, &value,
+                                                               MSM_CAMERA_I2C_BYTE_DATA);
+            CDBG("read value=0x%x", value);
+            exptime |= value << 16;
+            CDBG("after first op exptime =0x%x", exptime);
+                 s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_read(s_ctrl->sensor_i2c_client,
+                                                                   0x81, &value,
+                                                                   MSM_CAMERA_I2C_BYTE_DATA);
+            CDBG("read value=0x%x", value);
+            exptime |= value << 8;
+            CDBG("after second op exptime =0x%x", exptime);
+                 s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_read(s_ctrl->sensor_i2c_client,
+                                                                   0x82, &value,
+                                                                   MSM_CAMERA_I2C_BYTE_DATA);
+            CDBG("read value=0x%x", value);
+            exptime |= value;
+            CDBG("after third op exptime =0x%x", exptime);
+
+            s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_read(s_ctrl->sensor_i2c_client,
+                                                              0x88, &value,
+                                                              MSM_CAMERA_I2C_BYTE_DATA);
+            CDBG("read value=0x%x", value);
+            expmax |= value << 16;
+            CDBG("after first op expmax =0x%x", expmax);
+            s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_read(s_ctrl->sensor_i2c_client,
+                                                              0x89, &value,
+                                                              MSM_CAMERA_I2C_BYTE_DATA);
+            CDBG("read value=0x%x", value);
+            expmax |= value << 8;
+            CDBG("after second op expmax =0x%x", expmax);
+            s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_read(s_ctrl->sensor_i2c_client,
+                                                              0x8A, &value,
+                                                              MSM_CAMERA_I2C_BYTE_DATA);
+            CDBG("read value=0x%x", value);
+            expmax |= value;
+            CDBG("after third op expmax =0x%x", expmax);
+            CDBG("exptime=0x%x expmax=0x%x", exptime, expmax);
+            if (exptime < expmax) {
+                CDBG("writing sr200pc20m_scene_nightshot_Normal");
+                sr200pc20_WRT_LIST(s_ctrl,sr200pc20m_scene_nightshot_Normal);
+            } else {
+                CDBG("writing sr200pc20m_scene_nightshot_Dark");
+                sr200pc20_WRT_LIST(s_ctrl,sr200pc20m_scene_nightshot_Dark);
+            }
+            break;
+    default:
+	    pr_err("%s: Setting %d is invalid\n", __func__, mode);
+	    rc = 0;
+            break;
+    }
+    scene_mode_chg = 0;
+    CDBG("Scene mode X = %d", mode);
     return rc;
 }
 
@@ -280,21 +417,24 @@ int32_t sr200pc20_sensor_config(struct msm_sensor_ctrl_t *s_ctrl,
 		break;
 	case CFG_SET_INIT_SETTING:
 		CDBG("CFG_SET_INIT_SETTING\n");
+#ifdef CONFIG_LOAD_FILE /* this call should be always called first */
+		sr200_regs_table_init("/data/sr200pc20_yuv_t8.h");
+		pr_err("/data/sr200pc20_yuv_t8.h inside CFG_SET_INIT_SETTING");
+#endif
 		rc = sr200pc20_WRT_LIST(s_ctrl,sr200pc20_Init_Reg);
 #if 0
 		rc = sr200pc20_WRT_LIST(s_ctrl,sr200pc20_stop_stream);
 #endif
 		break;
 	case CFG_SET_RESOLUTION:
-		resolution = *((int32_t  *)cdata->cfg.setting);
-		CDBG("CFG_SET_RESOLUTION - res = %d\n" , resolution);
+		sr200pc20_ctrl.settings.resolution = *((int32_t  *)cdata->cfg.setting);
+		CDBG("CFG_SET_RESOLUTION - res = %d\n" , sr200pc20_ctrl.settings.resolution);
 		CDBG("sr200pc20_ctrl.op_mode = %d\n " , sr200pc20_ctrl.op_mode);
-		sr200pc20_set_resolution(s_ctrl , resolution );
 		break;
 	case CFG_SET_STOP_STREAM:
-		CDBG("CFG_SET_STOP_STREAM - res = %d\n ", resolution);
+		CDBG("CFG_SET_STOP_STREAM - res = %d\n ", sr200pc20_ctrl.settings.resolution);
 		if(streamon == 1){
-			CDBG("CFG_SET_STOP_STREAM *** res = %d - streamon == 1\n " , resolution);
+			CDBG("CFG_SET_STOP_STREAM *** res = %d - streamon == 1\n " , sr200pc20_ctrl.settings.resolution);
 #if 0
 			CDBG(" CFG_SET_STOP_STREAM writing stop stream registers: sr200pc20_stop_stream \n");
 			rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->
@@ -311,14 +451,51 @@ int32_t sr200pc20_sensor_config(struct msm_sensor_ctrl_t *s_ctrl,
 	case CFG_SET_START_STREAM:
 		CDBG("CFG_SET_START_STREAM\n");
 		CDBG("sr200pc20_ctrl.op_mode = %d,sr200pc20_ctrl.prev_mode = %d \n", sr200pc20_ctrl.op_mode, sr200pc20_ctrl.prev_mode);
-		if(sr200pc20_ctrl.op_mode != sr200pc20_ctrl.prev_mode)
-		{
-			sr200pc20_set_resolution(s_ctrl , resolution );
-		}
-		sr200pc20_set_effect( s_ctrl , sr200pc20_ctrl.settings.effect);
-		sr200pc20_set_white_balance( s_ctrl, sr200pc20_ctrl.settings.wb);
-		sr200pc20_set_exposure_compensation( s_ctrl , sr200pc20_ctrl.settings.exposure );
-		streamon = 1;
+                switch (sr200pc20_ctrl.op_mode) {
+                case CAMERA_MODE_PREVIEW:
+                        if (sr200pc20_ctrl.prev_mode != CAMERA_MODE_CAPTURE) {
+                            switch (sr200pc20_ctrl.prev_mode) {
+                            case CAMERA_MODE_INIT:
+                                    scene_mode_chg = 1;
+                                    sr200pc20_set_scene_mode(s_ctrl, sr200pc20_ctrl.settings.scenemode);
+                                    sr200pc20_set_effect( s_ctrl , sr200pc20_ctrl.settings.effect);
+                                    sr200pc20_set_white_balance( s_ctrl, sr200pc20_ctrl.settings.wb);
+                                    sr200pc20_set_exposure_compensation( s_ctrl , sr200pc20_ctrl.settings.exposure );
+                                    sr200pc20_set_metering(s_ctrl, sr200pc20_ctrl.settings.metering);
+                                    break;
+                            case CAMERA_MODE_RECORDING:
+                                    sr200pc20_WRT_LIST(s_ctrl,sr200pc20_Init_Reg);
+                                    scene_mode_chg = 1;
+                                    sr200pc20_set_scene_mode(s_ctrl, sr200pc20_ctrl.settings.scenemode);
+                                    sr200pc20_set_effect( s_ctrl , sr200pc20_ctrl.settings.effect);
+                                    sr200pc20_set_white_balance( s_ctrl, sr200pc20_ctrl.settings.wb);
+                                    sr200pc20_set_exposure_compensation( s_ctrl , sr200pc20_ctrl.settings.exposure);
+                                    sr200pc20_set_metering(s_ctrl, sr200pc20_ctrl.settings.metering);
+                                    break;
+                            case CAMERA_MODE_PREVIEW:
+                                    sr200pc20_set_scene_mode(s_ctrl, sr200pc20_ctrl.settings.scenemode);
+                                    break;
+                            default:
+                                    pr_err("Invalid previous mode");
+                                    break;
+                            }
+                        }
+                        if (sr200pc20_ctrl.op_mode != sr200pc20_ctrl.prev_mode) {
+                            sr200pc20_set_resolution(s_ctrl , sr200pc20_ctrl.settings.resolution);
+                        }
+                        streamon = 1;
+                        break;
+                case CAMERA_MODE_CAPTURE:
+                case CAMERA_MODE_RECORDING:
+                        if (sr200pc20_ctrl.op_mode != sr200pc20_ctrl.prev_mode) {
+                            sr200pc20_set_resolution(s_ctrl , sr200pc20_ctrl.settings.resolution );
+                        }
+                        streamon = 1;
+                        break;
+                default:
+                        pr_err("%s: CFG_SET_START_STREAM - %d INVALID mode\n", __func__, sr200pc20_ctrl.op_mode);
+                        break;
+                }
 		break;
 	case CFG_SET_SLAVE_INFO: {
 		struct msm_camera_sensor_slave_info sensor_slave_info;
@@ -548,25 +725,35 @@ int32_t sr200pc20_sensor_native_control(struct msm_sensor_ctrl_t *s_ctrl,
 		(cam_info->value_2 != SR200PC20_VALUE_WHITEBALANCE )&&
 		(cam_info->value_2 != SR200PC20_VALUE_EFFECT )){
 		if(cam_info->value_2 & SR200PC20_VALUE_EXPOSURE){
-		sr200pc20_set_exposure_compensation(s_ctrl, value_mark_ev);
-		sr200pc20_ctrl.settings.exposure=value_mark_ev;
+		    sr200pc20_ctrl.settings.exposure=value_mark_ev;
+                    if (streamon == 1) {
+                        sr200pc20_set_exposure_compensation(s_ctrl, value_mark_ev);
+                    }
 		}
 		 /*Hal set WB and Effect together */
 		if ((cam_info->value_2 & (SR200PC20_VALUE_WHITEBALANCE | SR200PC20_VALUE_EFFECT)) == 6){
 			sr200pc20_ctrl.settings.effect = cam_info->value_3;
 			value_mark_effect = sr200pc20_ctrl.settings.effect;
-			 sr200pc20_set_effect(s_ctrl, sr200pc20_ctrl.settings.effect);
+                        if (streamon == 1) {
+			    sr200pc20_set_effect(s_ctrl, sr200pc20_ctrl.settings.effect);
+                        }
 			sr200pc20_ctrl.settings.wb = cam_info->value_1;
 			value_mark_wb = sr200pc20_ctrl.settings.wb ;
-			sr200pc20_set_white_balance(s_ctrl, sr200pc20_ctrl.settings.wb);
+                        if (streamon == 1) {
+			    sr200pc20_set_white_balance(s_ctrl, sr200pc20_ctrl.settings.wb);
+                        }
 		}else{
+                        if(cam_info->value_2 & SR200PC20_VALUE_EFFECT){
+                                sr200pc20_ctrl.settings.effect=value_mark_effect;
+                                if (streamon == 1) {
+                                    sr200pc20_set_effect(s_ctrl, value_mark_effect);
+                                }
+                        }
 			if(cam_info->value_2 & SR200PC20_VALUE_WHITEBALANCE){
-				sr200pc20_set_white_balance(s_ctrl, value_mark_wb);
 				sr200pc20_ctrl.settings.wb=value_mark_wb;
-			}
-			if(cam_info->value_2 & SR200PC20_VALUE_EFFECT){
-				sr200pc20_set_effect(s_ctrl, value_mark_effect);
-				sr200pc20_ctrl.settings.effect=value_mark_effect;
+                                if (streamon == 1) {
+                                    sr200pc20_set_white_balance(s_ctrl, value_mark_wb);
+                                }
 			}
 		}
 	}else{
@@ -574,28 +761,55 @@ int32_t sr200pc20_sensor_native_control(struct msm_sensor_ctrl_t *s_ctrl,
 		case EXT_CAM_EV:
 			sr200pc20_ctrl.settings.exposure = cam_info->value_1;
 			value_mark_ev = sr200pc20_ctrl.settings.exposure;
-			sr200pc20_set_exposure_compensation(s_ctrl, sr200pc20_ctrl.settings.exposure);
+                        if (streamon == 1) {
+			    sr200pc20_set_exposure_compensation(s_ctrl, sr200pc20_ctrl.settings.exposure);
+                        }
 			break;
 		case EXT_CAM_WB:
 			sr200pc20_ctrl.settings.wb = cam_info->value_1;
-			value_mark_wb = sr200pc20_ctrl.settings.wb ;
-			sr200pc20_set_white_balance(s_ctrl, sr200pc20_ctrl.settings.wb);
+			value_mark_wb = sr200pc20_ctrl.settings.wb;
+                        if (streamon == 1) {
+                            sr200pc20_set_white_balance(s_ctrl, sr200pc20_ctrl.settings.wb);
+                        }
 			break;
 		case EXT_CAM_EFFECT:
 			sr200pc20_ctrl.settings.effect = cam_info->value_1;
 			value_mark_effect = sr200pc20_ctrl.settings.effect;
-			sr200pc20_set_effect(s_ctrl, sr200pc20_ctrl.settings.effect);
+                        if (streamon == 1) {
+			    sr200pc20_set_effect(s_ctrl, sr200pc20_ctrl.settings.effect);
+                        }
 			break;
 		case EXT_CAM_SENSOR_MODE:
 			sr200pc20_ctrl.prev_mode =  sr200pc20_ctrl.op_mode;
 			sr200pc20_ctrl.op_mode = cam_info->value_1;
+                        CDBG("EXT_CAM_SENSOR_MODE prev_mode=%d changed to op_mode=%d", sr200pc20_ctrl.prev_mode, cam_info->value_1);
 			break;
+		case EXT_CAM_EXIF:
+			sr200pc20_get_exif_info(cam_info);
+			if (!copy_to_user((void *)argp,
+				(const void *)&cam_info,
+				sizeof(cam_info)))
+			pr_err("copy failed");
+		break;
 		case EXT_CAM_CONTRAST:
 		#if 0
 			sr200pc20_ctrl.settings.contrast = cam_info->value_1;
 			sr200pc20_set_contrast(s_ctrl, sr200pc20_ctrl.settings.contrast);
 		#endif
 			break;
+                case EXT_CAM_SCENE_MODE:
+                        CDBG("EXT_CAM_SCENE_MODE value=%d", cam_info->value_1);
+                        scene_mode_chg = 1;
+                        sr200pc20_ctrl.settings.scenemode = cam_info->value_1;
+                        if (streamon == 1) {
+                            sr200pc20_set_scene_mode(s_ctrl, sr200pc20_ctrl.settings.scenemode);
+                        }
+                        break;
+                case EXT_CAM_METERING:
+                        sr200pc20_ctrl.settings.metering = cam_info->value_1;
+                        if (streamon == 1) {
+                            sr200pc20_set_metering(s_ctrl, sr200pc20_ctrl.settings.metering);
+                        }
 		default:
 			break;
 		}
@@ -613,6 +827,7 @@ void sr200pc20_set_default_settings(void)
 	sr200pc20_ctrl.settings.iso = CAMERA_ISO_MODE_AUTO;
 	sr200pc20_ctrl.settings.effect = CAMERA_EFFECT_OFF;
 	sr200pc20_ctrl.settings.scenemode = CAMERA_SCENE_AUTO;
+	sr200pc20_ctrl.settings.resolution = MSM_SENSOR_RES_FULL;
 }
 
 
@@ -630,6 +845,13 @@ void sr200pc20_get_exif(struct msm_sensor_ctrl_t *s_ctrl)
 	sr200pc20_exif_iso(s_ctrl);
 	CDBG("exp_time : %d\niso_value : %d\n",sr200pc20_exif.shutterspeed, sr200pc20_exif.iso);
 	return;
+}
+int32_t sr200pc20_get_exif_info(struct ioctl_native_cmd * exif_info)
+{
+	exif_info->value_1 = 1;	// equals 1 to update the exif value in the user level.
+	exif_info->value_2 = sr200pc20_exif.iso;
+	exif_info->value_3 = sr200pc20_exif.shutterspeed;
+	return 0;
 }
 
 static int sr200pc20_exif_shutter_speed(struct msm_sensor_ctrl_t *s_ctrl)
@@ -682,3 +904,145 @@ static int sr200pc20_exif_iso(struct msm_sensor_ctrl_t *s_ctrl)
 	CDBG("ISO = %d\n", sr200pc20_exif.iso);
 	return 0;
 }
+
+static int32_t sr200pc20_set_metering(struct msm_sensor_ctrl_t *s_ctrl, int mode)
+{
+	int32_t rc = 0;
+	CDBG("mode = %d", mode);
+	switch (mode) {
+	case CAMERA_AVERAGE:
+		rc = sr200pc20_WRT_LIST(s_ctrl, sr200pc20m_metering_matrix);
+		break;
+	case CAMERA_CENTER_WEIGHT:
+		rc = sr200pc20_WRT_LIST(s_ctrl, sr200pc20m_metering_center);
+		break;
+	case CAMERA_SPOT:
+		rc = sr200pc20_WRT_LIST(s_ctrl, sr200pc20m_metering_spot);
+		break;
+	default:
+		pr_err("%s: Setting %d is invalid\n", __func__, mode);
+		rc = 0;
+	}
+	return rc;
+}
+
+#ifdef CONFIG_LOAD_FILE
+int sr200_regs_from_sd_tuning(struct msm_camera_i2c_reg_conf *settings, struct msm_sensor_ctrl_t *s_ctrl,char * name)
+{
+    char *start, *end, *reg;
+    int addr,rc = 0;
+    unsigned int  value;
+    char reg_buf[5], data_buf1[5];
+
+    *(reg_buf + 4) = '\0';
+    *(data_buf1 + 4) = '\0';
+
+    if (settings != NULL){
+        pr_err("sr200_regs_from_sd_tunning start address %x start data %x",
+               settings->reg_addr,settings->reg_data);
+    }
+
+    if(sr200_regs_table == NULL) {
+        pr_err("sr200_regs_table is null ");
+        return -1;
+    }
+    pr_err("@@@ %s",name);
+    start = strstr(sr200_regs_table, name);
+    if (start == NULL){
+        return -1;
+    }
+    end = strstr(start, "};");
+    CDBG("Writing %s registers", name);
+    while (1) {
+        /* Find Address */
+        reg = strstr(start, "{0x");
+        if ((reg == NULL) || (reg > end))
+            break;
+        /* Write Value to Address */
+        if (reg != NULL) {
+            memcpy(reg_buf, (reg + 1), 4);
+            memcpy(data_buf1, (reg + 7), 4);
+
+            if(kstrtoint(reg_buf, 16, &addr))
+                pr_err("kstrtoint error .Please Align contents of the Header file!!") ;
+
+            if(kstrtoint(data_buf1, 16, &value))
+                pr_err("kstrtoint error .Please Align contents of the Header file!!");
+
+            if (reg)
+                start = (reg + 14);
+
+            if (addr == 0xff){
+                usleep_range(value * 10, (value* 10) + 10);
+                pr_err("delay = %d\n", (int)value*10);
+            } else{
+                rc=s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, addr,
+						                      value,MSM_CAMERA_I2C_BYTE_DATA);
+            }
+        }
+    }
+    pr_err("sr200_regs_from_sd_tunning end!");
+    return rc;
+}
+
+void sr200_regs_table_exit(void)
+{
+    pr_info("%s:%d\n", __func__, __LINE__);
+    if (sr200_regs_table) {
+        vfree(sr200_regs_table);
+        sr200_regs_table = NULL;
+    }
+}
+
+void sr200_regs_table_init(char *filename)
+{
+    struct file *filp;
+    char *dp;
+    long lsize;
+    loff_t pos;
+    int ret;
+
+    /*Get the current address space */
+    mm_segment_t fs = get_fs();
+    pr_err("%s %d", __func__, __LINE__);
+
+    /*Set the current segment to kernel data segment */
+    set_fs(get_ds());
+
+    filp = filp_open(filename, O_RDONLY, 0);
+
+    if (IS_ERR_OR_NULL(filp)) {
+        pr_err("file open error %ld",(long) filp);
+        return;
+    }
+    lsize = filp->f_path.dentry->d_inode->i_size;
+    pr_err("size : %ld", lsize);
+    dp = vmalloc(lsize);
+    if (dp == NULL) {
+        pr_err("Out of Memory");
+        filp_close(filp, current->files);
+    }
+
+    pos = 0;
+    memset(dp, 0, lsize);
+    ret = vfs_read(filp, (char __user *)dp, lsize, &pos);
+    if (ret != lsize) {
+        pr_err("Failed to read file ret = %d\n", ret);
+        vfree(dp);
+	filp_close(filp, current->files);
+    }
+
+    /*close the file*/
+    filp_close(filp, current->files);
+
+    /*restore the previous address space*/
+    set_fs(fs);
+
+    pr_err("coming to if part of string compare sr200_regs_table");
+    sr200_regs_table = dp;
+    sr200_regs_table_size = lsize;
+    *((sr200_regs_table + sr200_regs_table_size) - 1) = '\0';
+
+    return;
+}
+#endif

@@ -141,6 +141,7 @@ i2c@f9928000 {	 /*BLSP-1 QUP-6*/
 			reg = <0x28>;
 			interrupt-parent = <&msmgpio>;
 			sx9500-i2c,nirq-gpio = <&msmgpio 66 0x00>;
+			sx9500-i2c,adjdet-gpio = <&msmgpio 64 0x00>;
 		};
 	};
 

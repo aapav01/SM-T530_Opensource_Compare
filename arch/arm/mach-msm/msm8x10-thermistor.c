@@ -25,8 +25,30 @@
 
 #ifdef CONFIG_SEC_THERMISTOR
 /*Below adc table is same as batt_temp_adc table*/
-#if defined (CONFIG_MACH_KANAS3G_CU)
+#if defined (CONFIG_MACH_KANAS3G_CU) || defined (CONFIG_MACH_KANAS3G_CMCC)
 static struct sec_therm_adc_table temper_table_ap[] = {
+	{28504, 650},
+	{29127, 600},
+	{29793, 550},
+	{30468, 500},
+	{31300, 450},
+	{32356, 400},
+	{33386, 350},
+	{34401, 300},
+	{35448, 250},
+	{36461, 200},
+	{37480, 150},
+	{38420, 100},
+	{39203, 50},
+	{40022, 0},
+	{40667, -50},
+	{41224, -100},
+	{41668, -150},
+};
+#elif defined (CONFIG_MACH_KANAS3G_CTC)
+static struct sec_therm_adc_table temper_table_ap[] = {
+	{27294, 750},
+	{27894, 700},
 	{28504, 650},
 	{29127, 600},
 	{29793, 550},

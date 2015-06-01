@@ -15,6 +15,7 @@
 /include/ "msm8974pro-sec.dtsi"
 /include/ "msm8974pro-max77804k-k.dtsi"
 /include/ "msm8974pro-ac-sec-kactivelte-r01.dtsi"
+/include/ "msm8974pro-tdmb-kactivelte-r01.dtsi"
 
 / {
 	model = "Samsung KACTIVE rev0.1";

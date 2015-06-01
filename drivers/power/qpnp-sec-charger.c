@@ -63,6 +63,9 @@ static int sec_btm_temp = 250;
 #if defined(CONFIG_USB_SWITCH_RT8973)
 extern int rt_uart_connecting;
 #elif defined(CONFIG_SM5502_MUIC)
+#if defined(CONFIG_TORCH_FIX)
+extern int factory_uart_connected(void);
+#endif
 extern int uart_sm5502_connecting;
 #else
 extern int uart_connecting;
@@ -468,9 +471,6 @@ struct qpnp_chg_chip {
 	/* other */
 	struct	wake_lock		monitor_wake_lock;
 	struct	wake_lock		cable_wake_lock;
-#if defined(CONFIG_MACH_KANAS3G_CMCC)
-	struct	wake_lock		charging_wake_lock;
-#endif
 	/* SEC battery platform data*/
 	struct	sec_battery_data	*batt_pdata;
 	struct power_supply		ac_psy;
@@ -1188,18 +1188,6 @@ static int
 qpnp_chg_charge_en(struct qpnp_chg_chip *chip, int enable)
 {
 	pr_err(" qpnp_chg_charge_en called with enable=%d\n", enable);
-
-	//jine.wang add wakelock prevent charging sleep
-#if defined(CONFIG_MACH_KANAS3G_CMCC)
-	  if(enable)
-	  {
-	    wake_lock(&chip->charging_wake_lock);
-	  }
-	  else
-	  {
-	    wake_unlock(&chip->charging_wake_lock);
-	  }
-#endif
 
 	return qpnp_chg_masked_write(chip, chip->chgr_base + CHGR_CHG_CTRL,
 			CHGR_CHG_EN,
@@ -4839,7 +4827,11 @@ qpnp_chg_hwinit(struct qpnp_chg_chip *chip, u8 subtype,
 				reg = !(BAT_ID_EN);
 			else
 #elif defined(CONFIG_SM5502_MUIC)
+#if defined(CONFIG_TORCH_FIX)
+			if (check_sm5502_jig_state() || uart_sm5502_connecting || factory_uart_connected())
+#else
 			if (check_sm5502_jig_state() || uart_sm5502_connecting)
+#endif
 				reg = !(BAT_ID_EN);
 			else
 #else
@@ -5303,6 +5295,7 @@ sec_bat_read_dt_props(struct qpnp_chg_chip *chip)
 #endif
 	SEC_BAT_OF_PROP_READ(chip, ui_full_soc, "ui-full-soc", rc, 0);
 	SEC_BAT_OF_PROP_READ(chip, ui_full_current, "ui-full-current", rc, 0);
+	SEC_BAT_OF_PROP_READ(chip, ui_full_voltage, "ui-full-voltage", rc, 0);
 	SEC_BAT_OF_PROP_READ(chip, ui_full_count, "ui-full-count", rc, 0);
         SEC_BAT_OF_PROP_READ(chip, charging_term_time, "charging-term-time", rc, 0);
 	chip->batt_pdata->charging_term_time = chip->batt_pdata->charging_term_time * 60;
@@ -5314,6 +5307,7 @@ sec_bat_read_dt_props(struct qpnp_chg_chip *chip)
 #ifdef SEC_CHARGER_DEBUG
 	pr_err("ui-full-soc %d\n",chip->batt_pdata->ui_full_soc);
 	pr_err("ui-full-current %d\n",chip->batt_pdata->ui_full_current);
+	pr_err("ui-full-voltage %d\n",chip->batt_pdata->ui_full_voltage);
 	pr_err("ui-full-count %d\n",chip->batt_pdata->ui_full_count);
         pr_err("charging-term-time %d\n",chip->batt_pdata->charging_term_time);
         pr_err("recharging-voltage %d\n",chip->batt_pdata->recharging_voltage);
@@ -6077,6 +6071,7 @@ static void sec_handle_cable_insertion_removal(struct qpnp_chg_chip *chip)
 				pr_err("cable type (%d), but VBUS is absent\n",chip->cable_type);
 				sec_pm8226_stop_charging(chip);
 				chip->cable_type = CABLE_TYPE_NONE;
+				chip->batt_status = POWER_SUPPLY_STATUS_DISCHARGING;
 				break;
 			}
 
@@ -6106,7 +6101,7 @@ static void sec_handle_cable_insertion_removal(struct qpnp_chg_chip *chip)
 				qpnp_chg_iusb_trim_set(chip, 63);
 #else
 				#if defined(CONFIG_SEC_KANAS_PROJECT)
-				qpnp_chg_iusb_trim_set(chip, 63);
+				qpnp_chg_iusb_trim_set(chip, 48);
 				#else
 				qpnp_chg_iusb_trim_set(chip, 40);
 				#endif
@@ -6315,11 +6310,8 @@ static void sec_bat_monitor(struct work_struct *work)
 #ifdef SEC_BTM_TEST
 	static u8 btm_count;
 #endif
-	#if defined(CONFIG_MACH_CS03_SGLTE) || defined(CONFIG_MACH_Q7_CHN_SGLTE) || defined(CONFIG_MACH_VICTOR_CHN_SGLTE)
 	int rc;
 	u8 buck_sts = 0;
-	#endif
-
 
 	if (chip->is_in_sleep)
 		chip->is_in_sleep = false;
@@ -6419,7 +6411,6 @@ static void sec_bat_monitor(struct work_struct *work)
 
 	if (chip->batt_status == POWER_SUPPLY_STATUS_CHARGING || chip->is_recharging) {
 		if ( qpnp_chg_is_usb_chg_plugged_in(chip) && !chip->charging_disabled ) {
-			#if defined(CONFIG_MACH_CS03_SGLTE) || defined(CONFIG_MACH_Q7_CHN_SGLTE) || defined(CONFIG_MACH_VICTOR_CHN_SGLTE)
 			rc = qpnp_chg_read(chip, &buck_sts, INT_RT_STS(chip->buck_base), 1);
 			if (!rc) {
 				if (buck_sts & VDD_LOOP_IRQ) {
@@ -6428,14 +6419,13 @@ static void sec_bat_monitor(struct work_struct *work)
 			} else {
 				pr_err("failed to read buck rc=%d\n", rc);
 			}
-			#endif
 			if(chip->ui_full_chg) { /* second phase charging */
 				pr_err("second phase charging: ui_full_chg(%d) \n",chip->ui_full_chg);
 
 			} else { /* first phase charging */
 
 				if (((current_now * -1) < chip->batt_pdata->ui_full_current) &&
-					(batt_voltage >= chip->batt_pdata->recharging_voltage) &&
+					(batt_voltage >= chip->batt_pdata->ui_full_voltage) &&
 					(chip->recent_reported_soc >= chip->batt_pdata->ui_full_soc)) {
 
 					chip->ui_full_cnt++;
@@ -6637,6 +6627,7 @@ static void sec_bat_temperature_monitor(struct qpnp_chg_chip *chip)
 			if (chip->usb_present &&
 				chip->batt_status == POWER_SUPPLY_STATUS_CHARGING) {
 				pr_err("SEC BTM :stop charging @ temperature(%d) \n",temp);
+				msleep(1000);
 				sec_pm8226_stop_charging(chip);
 				chip->batt_health = POWER_SUPPLY_HEALTH_OVERHEAT;
 				chip->batt_status = POWER_SUPPLY_STATUS_NOT_CHARGING;
@@ -6649,6 +6640,7 @@ static void sec_bat_temperature_monitor(struct qpnp_chg_chip *chip)
 			if(chip->usb_present &&
 				chip->batt_status == POWER_SUPPLY_STATUS_CHARGING) {
 				pr_err("SEC BTM :stop charging @ temperature(%d) \n",temp);
+				msleep(1000);
 				sec_pm8226_stop_charging(chip);
 				chip->batt_health = POWER_SUPPLY_HEALTH_COLD;
 				chip->batt_status = POWER_SUPPLY_STATUS_NOT_CHARGING;
@@ -7109,6 +7101,12 @@ qpnp_charger_probe(struct spmi_device *spmi)
 	chip->ui_full_cnt = 0;
 	chip->siop_level = 100;
 	chip->batt_present = qpnp_chg_is_batt_present(chip);
+#ifdef CONFIG_MACH_KANAS3G_CTC
+    /*CF open power on state soc use calculate_soc_from_voltage to calculate soc,
+      voltage change fast, need short the update time to avoid soc jump*/
+	if(!chip->batt_present)
+		chip->update_time = 30;
+#endif
 
 	if(!chip->batt_pdata->charging_time)
 		chip->charging_term_time = (6 * 60 * 60);
@@ -7156,10 +7154,6 @@ qpnp_charger_probe(struct spmi_device *spmi)
                        "sec-charger-monitor");
 	wake_lock_init(&chip->cable_wake_lock, WAKE_LOCK_SUSPEND,
                        "sec-cable-check");
-#if defined(CONFIG_MACH_KANAS3G_CMCC)
-	  wake_lock_init(&chip->charging_wake_lock, WAKE_LOCK_SUSPEND,
-                       "sec-charging-lock");
-#endif
 	INIT_DELAYED_WORK(&chip->sec_bat_monitor_work,sec_bat_monitor);
 	//back to Ext OVP
 #ifndef CONFIG_NOT_USE_EXT_OVP
@@ -7212,9 +7206,10 @@ qpnp_charger_probe(struct spmi_device *spmi)
 
 	qpnp_chg_usb_usbin_valid_irq_handler(chip->usbin_valid.irq, chip);
 	qpnp_chg_dc_dcin_valid_irq_handler(chip->dcin_valid.irq, chip);
+	#ifndef SEC_CHARGER_CODE
 	power_supply_set_present(chip->usb_psy,
 			qpnp_chg_is_usb_chg_plugged_in(chip));
-
+	#endif
 	rc = qpnp_chg_regulator_batfet_set(chip, 1);
 	if (rc)
 		pr_err("failed to write to batt_if rc=%d\n", rc);
